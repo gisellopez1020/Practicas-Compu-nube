@@ -1,1 +1,3 @@
-Prueba de práctica 0
+Consul es una herramienta que permite la gestión de servicios en sistemas distribuidos, proporcionando funcionalidades como registro de servicios, descubrimiento de servicios, monitoreo de salud y configuración de red.
+
+El descubrimiento de servicios es el mecanismo mediante el cual los servicios pueden localizarse dinámicamente dentro de una infraestructura, evitando la dependencia de direcciones IP fijas y facilitando la escalabilidad y disponibilidad de los sistemas.

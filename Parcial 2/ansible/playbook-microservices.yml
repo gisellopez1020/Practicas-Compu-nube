@@ -1,0 +1,227 @@
+---
+- name: Desplegar microservicios en vm-microservices
+  hosts: microservices
+  become: true
+
+  vars:
+    DHUSER: "gisel2106"
+
+  tasks:
+
+    - name: Verificar que Docker está activo
+      service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Crear red Docker para los microservicios
+      command: docker network create microapp_network
+      ignore_errors: true
+
+    - name: Eliminar contenedores previos (solo microservicios)
+      shell: |
+        for name in users-service users-service-2 products-service products-service-2 orders-service orders-service-2; do
+          docker rm -f $name 2>/dev/null || true
+        done
+
+    - name: Verificar si MySQL ya existe y está corriendo
+      command: docker inspect -f "{{.State.Running}}" myflaskapp_mysql
+      register: mysql_running
+      ignore_errors: true
+
+    - name: Levantar MySQL solo si no existe
+      command: >
+        docker run -d
+        --name myflaskapp_mysql
+        --restart always
+        --network microapp_network
+        --network-alias mysql
+        -e MYSQL_ROOT_PASSWORD=root
+        -e MYSQL_DATABASE=myflaskapp
+        -p 3307:3306
+        mysql:8.0
+      when: mysql_running.rc != 0 or mysql_running.stdout != "true"
+
+    - name: Esperar que MySQL esté listo
+      shell: |
+        for i in $(seq 1 40); do
+          docker exec myflaskapp_mysql mysql -uroot -proot -e "SELECT 1;" 2>/dev/null && exit 0
+          echo "Intento $i/40..."
+          sleep 10
+        done
+        exit 1
+
+    - name: Crear bases de datos necesarias
+      shell: |
+        docker exec myflaskapp_mysql mysql -uroot -proot -e "
+          CREATE DATABASE IF NOT EXISTS myflaskapp;
+          USE myflaskapp;
+          CREATE TABLE IF NOT EXISTS users (
+            id int NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            name varchar(255), email varchar(255),
+            username varchar(255), password varchar(255)
+          );
+          INSERT IGNORE INTO users VALUES
+            (1,'juan','juan@gmail.com','juan','123'),
+            (2,'maria','maria@gmail.com','maria','456');
+          CREATE DATABASE IF NOT EXISTS products_db;
+          USE products_db;
+          CREATE TABLE IF NOT EXISTS products (
+            id int NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            name varchar(255) NOT NULL,
+            price decimal(10,2) NOT NULL,
+            quantity int NOT NULL DEFAULT 0
+          );
+          INSERT IGNORE INTO products VALUES
+            (1,'Laptop',999.99,10),(2,'Mouse',29.99,50),(3,'Keyboard',79.99,30);
+          CREATE DATABASE IF NOT EXISTS orders_db;
+          USE orders_db;
+          CREATE TABLE IF NOT EXISTS orders (
+            id int NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            user_name varchar(100) NOT NULL,
+            user_email varchar(100) NOT NULL,
+            total decimal(10,2) NOT NULL,
+            created_at datetime DEFAULT CURRENT_TIMESTAMP
+          );
+          CREATE TABLE IF NOT EXISTS order_items (
+            id int NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            order_id int NOT NULL,
+            product_id int NOT NULL,
+            product_name varchar(100) NOT NULL,
+            quantity int NOT NULL,
+            price decimal(10,2) NOT NULL,
+            FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
+          );
+        "
+
+    - name: Verificar si Consul ya existe y está corriendo
+      command: docker inspect -f "{{.State.Running}}" myflaskapp_consul
+      register: consul_running
+      ignore_errors: true
+
+    - name: Levantar Consul solo si no existe
+      command: >
+        docker run -d
+        --name myflaskapp_consul
+        --restart always
+        --network microapp_network
+        -p 8500:8500
+        hashicorp/consul:1.14
+        agent -server -ui -node=server-1 -bootstrap-expect=1 -client=0.0.0.0
+      when: consul_running.rc != 0 or consul_running.stdout != "true"
+
+    - name: Levantar users-service (puerto 3001)
+      command: >
+        docker run -d
+        --name users-service
+        --restart always
+        --network microapp_network
+        -e FLASK_APP=run.py
+        -e FLASK_ENV=production
+        -e MYSQL_HOST=myflaskapp_mysql
+        -e MYSQL_PORT=3306
+        -e MYSQL_DATABASE=myflaskapp
+        -e MYSQL_USER=root
+        -e MYSQL_ROOT_PASSWORD=root
+        -e CONSUL_HOST=myflaskapp_consul
+        -e CONSUL_PORT=8500
+        -p 3001:5002
+        {{ DHUSER }}/users-service:latest
+
+    - name: Levantar users-service-2 (puerto 3011)
+      command: >
+        docker run -d
+        --name users-service-2
+        --restart always
+        --network microapp_network
+        -e FLASK_APP=run.py
+        -e FLASK_ENV=production
+        -e MYSQL_HOST=myflaskapp_mysql
+        -e MYSQL_PORT=3306
+        -e MYSQL_DATABASE=myflaskapp
+        -e MYSQL_USER=root
+        -e MYSQL_ROOT_PASSWORD=root
+        -e CONSUL_HOST=myflaskapp_consul
+        -e CONSUL_PORT=8500
+        -p 3011:5002
+        {{ DHUSER }}/users-service:latest
+
+    - name: Levantar products-service (puerto 3002)
+      command: >
+        docker run -d
+        --name products-service
+        --restart always
+        --network microapp_network
+        -e FLASK_APP=run.py
+        -e FLASK_ENV=production
+        -e MYSQL_HOST=myflaskapp_mysql
+        -e MYSQL_PORT=3306
+        -e MYSQL_DATABASE=myflaskapp
+        -e MYSQL_USER=root
+        -e MYSQL_ROOT_PASSWORD=root
+        -e CONSUL_HOST=myflaskapp_consul
+        -e CONSUL_PORT=8500
+        -p 3002:5003
+        {{ DHUSER }}/products-service:latest
+
+    - name: Levantar products-service-2 (puerto 3012)
+      command: >
+        docker run -d
+        --name products-service-2
+        --restart always
+        --network microapp_network
+        -e FLASK_APP=run.py
+        -e FLASK_ENV=production
+        -e MYSQL_HOST=myflaskapp_mysql
+        -e MYSQL_PORT=3306
+        -e MYSQL_DATABASE=myflaskapp
+        -e MYSQL_USER=root
+        -e MYSQL_ROOT_PASSWORD=root
+        -e CONSUL_HOST=myflaskapp_consul
+        -e CONSUL_PORT=8500
+        -p 3012:5003
+        {{ DHUSER }}/products-service:latest
+
+    - name: Levantar orders-service (puerto 3003)
+      command: >
+        docker run -d
+        --name orders-service
+        --restart always
+        --network microapp_network
+        -e FLASK_APP=run.py
+        -e FLASK_ENV=production
+        -e MYSQL_HOST=myflaskapp_mysql
+        -e MYSQL_PORT=3306
+        -e MYSQL_DATABASE=myflaskapp
+        -e MYSQL_USER=root
+        -e MYSQL_ROOT_PASSWORD=root
+        -e CONSUL_HOST=myflaskapp_consul
+        -e CONSUL_PORT=8500
+        -p 3003:5004
+        {{ DHUSER }}/orders-service:latest
+
+    - name: Levantar orders-service-2 (puerto 3013)
+      command: >
+        docker run -d
+        --name orders-service-2
+        --restart always
+        --network microapp_network
+        -e FLASK_APP=run.py
+        -e FLASK_ENV=production
+        -e MYSQL_HOST=myflaskapp_mysql
+        -e MYSQL_PORT=3306
+        -e MYSQL_DATABASE=myflaskapp
+        -e MYSQL_USER=root
+        -e MYSQL_ROOT_PASSWORD=root
+        -e CONSUL_HOST=myflaskapp_consul
+        -e CONSUL_PORT=8500
+        -p 3013:5004
+        {{ DHUSER }}/orders-service:latest
+
+    - name: Mostrar estado final de contenedores
+      command: docker ps --format "table {{ '{{' }}.Names{{ '}}' }}\t{{ '{{' }}.Status{{ '}}' }}\t{{ '{{' }}.Ports{{ '}}' }}"
+      register: docker_output
+
+    - name: Resultado docker ps
+      debug:
+        msg: "{{ docker_output.stdout_lines }}"

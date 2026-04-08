@@ -1,0 +1,52 @@
+---
+- name: Configurar HAProxy en vm-haproxy
+  hosts: haproxy
+  become: true
+
+  tasks:
+
+    - name: Actualizar caché APT
+      apt:
+        update_cache: true
+
+    - name: Instalar HAProxy
+      apt:
+        name: haproxy
+        state: present
+
+    - name: Hacer backup de la config original
+      copy:
+        src: /etc/haproxy/haproxy.cfg
+        dest: /etc/haproxy/haproxy.cfg.bak
+        remote_src: true
+        force: false
+
+    - name: Copiar haproxy.cfg configurado
+      copy:
+        src: files/haproxy.cfg
+        dest: /etc/haproxy/haproxy.cfg
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Validar sintaxis del haproxy.cfg
+      command: haproxy -c -f /etc/haproxy/haproxy.cfg
+      register: syntax_check
+
+    - name: Mostrar resultado de validacion
+      debug:
+        msg: "{{ syntax_check.stdout_lines }}"
+
+    - name: Reiniciar y habilitar HAProxy
+      service:
+        name: haproxy
+        state: restarted
+        enabled: true
+
+    - name: Verificar que HAProxy escucha en puerto 80 y 8080
+      command: ss -tlnp
+      register: ports_output
+
+    - name: Mostrar puertos activos
+      debug:
+        msg: "{{ ports_output.stdout_lines }}"
